@@ -1,0 +1,129 @@
+# ==================== ====================
+# Developed by Muller Matos
+# Website -> https://github.com/millerjmatos/
+# Created -> Sep/2025
+# ==================== ====================
+
+# 1 - INTERFACE LIST (WAN / PROVIDERS)
+
+# Create the interface list "PROVIDERS" used in the firewall and add the provider interfaces to the list:
+
+/interface list add name=PROVIDERS
+
+# ==================== ====================
+
+# 2 - ADDRESS-LIST: not_in_internet (BOGONS)
+
+/ip firewall address-list add address=0.0.0.0/8 comment="====================> RFC6890 - SELF-IDENTIFICATION" list=not_in_internet
+
+/ip firewall address-list add address=100.64.0.0/10 comment="====================> RFC6890 - SHARED ADDRESS SPACE" list=not_in_internet
+
+/ip firewall address-list add address=127.0.0.0/8 comment="====================> RFC6890 - LOOPBACK" list=not_in_internet
+
+/ip firewall address-list add address=169.254.0.0/16 comment="====================> RFC6890 - Link Local" list=not_in_internet
+
+/ip firewall address-list add address=192.0.0.0/24 comment="====================> RFC6890 - IETF Protocol Assignments" list=not_in_internet
+
+/ip firewall address-list add address=192.0.2.0/24 comment="====================> RFC6890" list=not_in_internet
+
+/ip firewall address-list add address=192.88.99.0/24 comment="====================> RFC3068 - 6TO4 RELAY ROUTERS" Relay Anycast" list=not_in_internet
+
+/ip firewall address-list add address=198.18.0.0/15 comment="====================> RFC6890 - BENCHMARKING" list=not_in_internet
+
+/ip firewall address-list add address=198.51.100.0/24 comment="====================> RFC6890" list=not_in_internet
+
+/ip firewall address-list add address=203.0.113.0/24 comment="====================> RFC6890" list=not_in_internet
+
+/ip firewall address-list add address=224.0.0.0/4 comment="====================> MULTICAST" list=not_in_internet
+
+/ip firewall address-list add address=240.0.0.0/4 comment="====================> RFC6890 - RESERVED" list=not_in_internet
+
+# ==================== ====================
+
+# 3 - INPUT CHAIN — CONNECTION STATE AND ATTACK DETECTION
+
+/ip firewall filter add action=accept chain=input comment="====================> ALLOW C-STATE ESTABLISHED RELATED UNTRACKED" connection-state=established,related,untracked
+
+/ip firewall filter add action=drop chain=input comment="====================> DROP C-STATE INVALID" connection-state=invalid
+
+/ip firewall filter add action=add-src-to-address-list address-list=port_scanners address-list-timeout=1w chain=input comment="====================> SMART DETECTION" dst-port=3389,20-25,80,8080 in-interface-list=PROVIDERS protocol=tcp
+
+/ip firewall filter add action=add-src-to-address-list address-list=synflood_attack address-list-timeout=1w chain=input comment="====================> SYN FLOOD DETECTION" connection-limit=30,32 in-interface-list=PROVIDERS protocol=tcp tcp-flags=syn
+
+/ip firewall filter add action=tarpit chain=input protocol=tcp src-address-list=synflood_attack
+
+/ip firewall filter add action=add-src-to-address-list address-list=port_scanners address-list-timeout=1w chain=input comment="====================> PORT SCAN TCP" in-interface-list=PROVIDERS protocol=tcp psd=21,3s,3,1
+
+/ip firewall filter add action=add-src-to-address-list address-list=port_scanners address-list-timeout=1w chain=input comment="====================> PORT SCAN UDP" in-interface-list=PROVIDERS protocol=udp psd=21,3s,3,1
+
+# ==================== ====================
+
+# 4 - INPUT - ALLOWED SERVICES (ICMP / DHCP / VPNs / PORT KNOCKING / WINBOX )
+
+/ip firewall filter add action=jump chain=input comment="====================> ICMP CONTROL" in-interface-list=PROVIDERS jump-target=ICMP protocol=icmp
+
+/ip firewall filter add action=accept chain=input comment="====================> ALLOW DHCP CLIENT" dst-port=67,68 in-interface-list=PROVIDERS protocol=udp
+
+/ip firewall filter add action=accept chain=input comment="====================> ALLOW L2TP TUNNEL IPSEC" dst-port=1701,500,4500 in-interface-list=PROVIDERS protocol=udp
+
+/ip firewall filter add action=accept chain=input comment="====================> ALLOW ENCAPSULATING SECURITY PAYLOAD" in-interface-list=PROVIDERS protocol=ipsec-esp
+
+/ip firewall filter add action=accept chain=input comment="====================> ALLOW AUTHENTICATION HEADER" in-interface-list=PROVIDERS protocol=ipsec-ah
+
+/ip firewall filter add action=accept chain=input comment="====================> ALLOW WIREGUARD" dst-port=13231 in-interface-list=PROVIDERS protocol=udp
+
+/ip firewall filter add action=add-src-to-address-list address-list=access_allowed address-list-timeout=1h chain=input comment="====================> PORT KNOCKING" dst-port=<CHOSEN PORT> protocol=tcp
+
+/ip firewall filter add action=drop chain=input comment="====================> ALLOW WINBOX" dst-port=<SERVICE PORT> protocol=tcp src-address-list=!access_allowed
+
+/ip firewall filter add action=drop chain=input comment="====================> DROP ALL" in-interface-list=PROVIDERS
+
+# ==================== ====================
+
+# 5 - ICMP CHAIN (CUSTOM)
+
+/ip firewall filter add action=accept chain=ICMP comment="====================> ECHO REQUEST - AVOIDING PING FLOOD, ADJUST THE LIMIT AS NEEDED" icmp-options=8:0 limit=50,5:packet protocol=icmp
+
+/ip firewall filter add action=accept chain=ICMP comment="====================> ECHO REPLY" icmp-options=0:0 limit=50,5:packet protocol=icmp
+
+/ip firewall filter add action=accept chain=ICMP comment="====================> TIME EXCEEDED" icmp-options=11:0 limit=50,5:packet protocol=icmp
+
+/ip firewall filter add action=accept chain=ICMP comment="====================> DESTINATION UNREACHABLE" icmp-options=3:0-1 limit=50,5:packet protocol=icmp
+
+/ip firewall filter add action=accept chain=ICMP comment="====================> PMTUD" icmp-options=3:4 limit=50,5:packet protocol=icmp
+
+/ip firewall filter add action=drop chain=ICMP comment="====================> DROP TO THE OTHER ICMPS" protocol=icmp
+
+# ==================== ====================
+
+# 6 - RAW - BLOCKING BEFORE CONNTRACK (EFFICIENT)
+
+/ip firewall raw add action=drop chain=prerouting comment="====================> DROP PORT SCAN" in-interface-list=PROVIDERS src-address-list=port_scanners
+
+/ip firewall raw add action=drop chain=prerouting comment="====================> DROP INCOMING WHICH IS NOT PUBLIC IP" in-interface-list=PROVIDERS src-address-list=not_in_internet
+
+/ip firewall raw add action=drop chain=prerouting comment="====================> DROP DANGEROUS SERVICES" dst-port=69,135,137-139,445,1433,1521,3306,5432,5900 in-interface-list=PROVIDERS protocol=tcp
+
+/ip firewall raw add action=drop chain=prerouting comment="====================> DROP DANGEROUS SERVICES" dst-port=69,135,137-139,445,1433,1521,3306,5432,5900 in-interface-list=PROVIDERS protocol=udp
+
+# ==================== ====================
+
+# 7 - FORWARD CHAIN - TRAFFIC PASSING THROUGH THE ROUTER
+
+/ip firewall filter add action=accept chain=forward comment="====================> ALLOW C-STATE ESTABLISHED RELATED" connection-state=established,related
+
+/ip firewall filter add action=drop chain=forward comment="====================> DROP C-STATE INVALID" connection-state=invalid
+
+# ==================== ====================
+
+# 8 - TCP ADJUSTMENT AND NEIGHBOR DISCOVERY
+
+/ip settings set tcp-syncookies=yes
+
+/ip neighbor discovery-settings set discover-interface-list=!PROVIDERS
+
+# ==================== ====================
+
+# 9 - TIMEOUT ADJUSTMENT
+
+/ip firewall connection tracking set tcp-established-timeout=12h
